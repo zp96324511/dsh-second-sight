@@ -1,6 +1,6 @@
 {
   "name": "dsh-second-sight",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "给纯文本主模型补一层看图能力：双胞胎路由 + ask_image 工具 + 模型面板里的副眼开关（零依赖），自带 GitHub Release 在线升级通道。",
   "type": "module",
   "main": "index.js",

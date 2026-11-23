@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 插件名 | `dsh-second-sight`（中文名：副眼） |
-| 版本 | 0.6.0（双胞胎路由 + `ask_image` + 模型面板副眼开关 + GitHub Release 在线升级；副模型会话级、无全局默认） |
+| 版本 | 0.6.1（双胞胎路由 + `ask_image` + 模型面板副眼开关 + GitHub Release 在线升级；副模型会话级、无全局默认） |
 | 文档日期 | 2026-11-20（实施记录见第 16–19 节，2026-11-21 / 2026-11-23） |
 | 目标宿主 | DSH `0.2.2-rc.1`（`@deepseek-ai/dsh` 各内部包版本一致） |
 | 运行环境 | Node ≥ 22.13、Windows 11（示例路径按 win10 机器写） |
@@ -886,3 +886,29 @@ ctx.inject(['webServer'], (scoped) => {
 - `.github/workflows/publish.yml`：tag `v*` → 校验 tag == package.json → `npm run check`
   → 可选 npm publish → `npm pack` + 稳定名 → `make-channel.mjs` → `gh release upload`。
   升级通道读 `releases/latest/download/channel.json`，三个资产必须同属一个 release。
+
+## 20. 实施记录（0.6.1，2026-11-23）
+
+### 20.1 面板按按钮右沿定位
+
+- 座位 `conversation.input.right`（order 10）排在官方模型选择器**前面**，而这一行整体靠右：
+  按钮文字一长（开了副眼后显示「副模型名 · 档位」），宽度就是**向左**长的。
+- `panelRect` 原先按 `rect.left` 定位，按钮变宽 → 面板跟着左移；现在改成
+  `right = rect.right ?? (left + width)`，`left = clamp(right - width, 8, vw-width-8)`，
+  右沿钉在按钮上，按钮变宽时面板不动。
+- 首帧先用 `FALLBACK_PANEL` 再在 effect 里测量，会看到「先画在左边、再跳到按钮上」；
+  测量改用 `useLayoutEffect`（测试用的小 React 没有该 hook 时退回 `useEffect`），
+  在绘制前就把坐标定好。
+
+### 20.2 底部版本栏的透明间隙
+
+- 现象：版本行上方的分隔线与版本内容之间有一条「透明带」，滚动到折叠线的那一行会从
+  分隔线下面透出来（用户截图里是 `Agnes CN` 被分隔线横穿）。
+- 根因：`panelBodyStyle` 用 `margin: 0 0 -6px` 把页脚上提 6px，压住列表的 `padding-bottom`；
+  页脚本身没有背景（只用 `boxShadow: inset 0 1px 0` 画线），被压住的 6px 里列表内容
+  照常绘制、透过页脚露出来。
+- 修法：去掉列表的负 margin，列表的裁切边与页脚上沿重合，分隔线下面就是页脚自己的底；
+  列表的 `padding-bottom: 6px` 保留（滚到底时最后一行仍与分隔线留 6px 间距）。
+  页脚只在左右/下方用负 margin 做通栏贴边，上方不压列表。
+- 回归：`test/client.mjs` 新增「右边对齐 / 按钮变宽不横跳」与「列表不做负 margin 压页脚」
+  两组断言（面板布局段）。

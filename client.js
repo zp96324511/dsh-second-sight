@@ -26,11 +26,14 @@ window.__ModuleLoader__.load({
     const { createPortal } = require('react-dom')
     const h = React.createElement
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React
+    /** 量位置要赶在首帧绘制之前，否则面板会先画在兜底坐标上、下一帧再跳过去。
+     *  测试用的小 React 没有 useLayoutEffect，退回 useEffect（测试不看首帧）。 */
+    const useIsomorphicLayoutEffect = React.useLayoutEffect ?? useEffect
 
     const PACKAGE = 'dsh-second-sight'
     const NAMESPACE = 'secondSight'
     /** 与 package.json 同步；scripts/check-manifest.mjs 会校验，避免面板显示旧版本号。 */
-    const CLIENT_VERSION = '0.6.0'
+    const CLIENT_VERSION = '0.6.1'
 
     // —— 远端描述符 ——
     //
@@ -333,13 +336,14 @@ window.__ModuleLoader__.load({
     }
 
     // 列表自己的滚动区：头部固定在上面，滚的只有这一块，滚到顶也不会露到标题行下面去。
+    // 不要用负 margin 把它压到页脚上：页脚是透明的（只画一条 inset 分隔线），压住的
+    // 那几 px 会变成一条透明带——滚动到折叠线的那一行会从分隔线下面透出来。
     const panelBodyStyle = {
       display: 'flex',
       flexDirection: 'column',
       gap: 1,
       flex: '1 1 auto',
       minHeight: 0,
-      margin: '0 0 -6px',
       padding: '2px 0 6px',
       overflowY: 'auto',
       overflowX: 'hidden',
@@ -353,6 +357,7 @@ window.__ModuleLoader__.load({
     }
 
     // 底部升级行：版本号、状态、一个按钮。日志展开时只占一小块，别把模型列表挤没。
+    // 负 margin 只往左右/下方伸（通栏贴边），上方必须紧贴列表的裁切边，不能盖住列表。
     const panelFootStyle = {
       display: 'flex',
       flexDirection: 'column',
@@ -415,9 +420,12 @@ window.__ModuleLoader__.load({
     const FALLBACK_PANEL = { left: 12, bottom: 96, width: 300, maxHeight: 320 }
 
     /**
-     * 面板落在哪：宽度按视口夹住，水平上夹在 [8, vw-width-8] 之间；
+     * 面板落在哪：**右边**贴着触发按钮的右边。按钮在这一行里是靠右摆的，副模型名/档位
+     * 一长，按钮就往左长——面板左沿跟着往左让、右沿始终钉在按钮上，位置才对得稳；
+     * 按左沿定位的话每换一次模型，面板就跟着按钮横跳。
+     * 宽度按视口夹住，最终仍保证面板整体落在 [8, vw-8] 内；
      * 高度只给「按钮上方真实剩余的空间」，否则手机上会顶出屏幕。
-     * @param {{left:number, top:number}} rect - 触发按钮的视口矩形。
+     * @param {{left:number, top:number, right?:number, width?:number}} rect - 触发按钮的视口矩形。
      * @param {{width:number, height:number}} viewport - 视口尺寸。
      * @returns {{left:number, bottom:number, width:number, maxHeight:number}} 用于 fixed 定位。
      */
@@ -425,9 +433,10 @@ window.__ModuleLoader__.load({
       const vw = viewport?.width ?? 360
       const vh = viewport?.height ?? 640
       const top = rect?.top ?? 0
-      const left = rect?.left ?? 0
       const width = Math.min(320, Math.max(200, vw - 16))
-      const x = Math.min(Math.max(8, left), Math.max(8, vw - width - 8))
+      // getBoundingClientRect 一定带 right；测试里的假矩形可能只给 left / width。
+      const right = rect?.right ?? ((rect?.left ?? 0) + (rect?.width ?? 0))
+      const x = Math.min(Math.max(8, right - width), Math.max(8, vw - width - 8))
       return {
         left: x,
         bottom: Math.max(8, vh - top + 6),
@@ -864,9 +873,10 @@ window.__ModuleLoader__.load({
 
       // 面板贴着按钮往上弹：宽度按视口夹住，高度按按钮上方的真实空间夹住，
       // 否则手机上会顶出屏幕（外层是 fixed + overflow hidden，内容再长也只会内部滚动）。
+      // 用 layout effect：首帧绘制前就把坐标量好，别先画在兜底位置再跳过去。
       const [anchor, setAnchor] = useState(undefined)
       const [query, setQuery] = useState('')
-      useEffect(() => {
+      useIsomorphicLayoutEffect(() => {
         if (!open) {
           setAnchor(undefined)
           return undefined

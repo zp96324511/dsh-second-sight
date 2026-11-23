@@ -846,24 +846,34 @@ await check('窄屏只留图标，宽屏带「副眼」二字', async () => {
   delete globalThis.window.matchMedia
 })
 
-process.stdout.write('\n移动端布局\n')
+process.stdout.write('\n面板布局\n')
 
-await check('面板不顶出屏幕：宽度受视口夹住、高度只占按钮上方的空间', async () => {
+await check('面板右边贴着按钮右边：按钮变宽（副模型名/档位变长）时面板不横跳', async () => {
   const plugin = bundle.factory(fakeRequire(createMiniReact()))
-  // 360×640 的手机，按钮在 y=560（软键盘弹出后只剩这么点空间）
-  const phone = plugin.panelRect({ left: 300, top: 560 }, { width: 360, height: 640 })
-  equal(phone.width, 320, '宽度夹到 320')
-  equal(phone.left, 32, '左边夹到 vw-width-8')
-  equal(phone.bottom, 86, '贴着按钮上沿')
-  equal(phone.maxHeight, 420, '高度上限 420')
 
-  // 窄到放不下 320 时继续让步
-  const tiny = plugin.panelRect({ left: 0, top: 300 }, { width: 280, height: 640 })
+  // 桌面：按钮 660..700，面板右沿对齐 700。
+  const short = plugin.panelRect({ left: 660, width: 40, top: 560 }, { width: 900, height: 640 })
+  equal(short.width, 320, '宽度 320')
+  equal(short.left + short.width, 700, '右边与按钮右边对齐')
+  equal(short.bottom, 86, '贴着按钮上沿')
+  equal(short.maxHeight, 420, '高度上限 420')
+
+  // 选了副模型/档位后按钮向左长到 180 宽（靠右摆，右边不动）——面板右沿仍是 700，位置不动。
+  const long = plugin.panelRect({ left: 520, width: 180, top: 560 }, { width: 900, height: 640 })
+  equal(long.left + long.width, 700, '按钮变宽后右沿仍对齐')
+  equal(long.left, short.left, '面板不跟着按钮的左边横跳')
+
+  // 贴着屏幕右边：右沿夹在 vw-8，不越界。
+  const edge = plugin.panelRect({ left: 640, width: 300, top: 560 }, { width: 900, height: 640 })
+  equal(edge.left + edge.width, 892, '右边夹到 vw-8')
+
+  // 窄到放不下 320 时继续让步（手机）
+  const tiny = plugin.panelRect({ left: 0, width: 40, top: 300 }, { width: 280, height: 640 })
   equal(tiny.width, 264, '宽度跟视口走')
   equal(tiny.left, 8, '左边至少留 8')
 
   // 按钮贴近屏幕顶部：允许的最小高度，不出现负数
-  const top = plugin.panelRect({ left: 40, top: 30 }, { width: 360, height: 640 })
+  const top = plugin.panelRect({ left: 40, width: 40, top: 30 }, { width: 360, height: 640 })
   equal(top.maxHeight, 140, '最少 140 高')
   ok(top.bottom > 0, 'bottom 为正')
 })
@@ -889,11 +899,16 @@ await check('面板用 fixed 定位，标题独占一行，列表在自己那块
   const parts = Array.isArray(panel.children) ? panel.children : [panel.children]
   const head = parts[0]?.props
   const body = parts[1]?.props
-  ok(head !== undefined && body !== undefined, '头部与列表各占一段')
+  const foot = parts[2]?.props
+  ok(head !== undefined && body !== undefined && foot !== undefined, '头部、列表、页脚各占一段')
   equal(head.style.position, undefined, '头部不浮动，不会是浮层')
   equal(head.style.display, 'flex', '头部是一行')
   equal(body.style.overflowY, 'auto', '列表自己滚')
   equal(body.style.minHeight, 0, '列表可收缩，长内容才滚得动')
+  // 回归：列表与页脚不能重叠。页脚是透明的（只有一条 inset 分隔线），压住的几 px
+  // 会变成透明带，滚到折叠线的那一行会从分隔线下面透出来。
+  ok(!String(body.style.margin ?? '').includes('-'), '列表不用负 margin 压到页脚上')
+  equal(foot.style.margin, '0 -6px -6px', '页脚仍通栏贴边（只向左右/下方伸）')
 })
 await check('面板里 provider 分组行必须在（回归：只剩模型名）', async () => {
   const mini = createMiniReact()
