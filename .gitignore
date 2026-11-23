@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+dist/
+
+# 本地草稿与运行记录
+scratch/
+.tmp/
+*.log
+*.log.err
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

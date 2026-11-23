@@ -1,0 +1,74 @@
+{
+  "name": "dsh-second-sight",
+  "version": "0.6.0",
+  "description": "给纯文本主模型补一层看图能力：双胞胎路由 + ask_image 工具 + 模型面板里的副眼开关（零依赖），自带 GitHub Release 在线升级通道。",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./update": "./update.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "update.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "vision",
+    "multimodal",
+    "ask_image",
+    "second-sight",
+    "self-update"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zp96324511/dsh-second-sight.git"
+  },
+  "homepage": "https://github.com/zp96324511/dsh-second-sight#readme",
+  "bugs": {
+    "url": "https://github.com/zp96324511/dsh-second-sight/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "node scripts/check-manifest.mjs && node --check index.js && node --check update.js && node --check client.js && npm test",
+    "test": "node test/smoke.mjs && node test/client.mjs && node test/gateway-mount.mjs && node test/host-integration.mjs && node test/update.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "test:client": "node test/client.mjs",
+    "test:gateway": "node test/gateway-mount.mjs",
+    "test:host": "node test/host-integration.mjs",
+    "test:update": "node test/update.mjs",
+    "verify:install": "node scripts/verify-install.mjs",
+    "pack": "npm pack --pack-destination dist",
+    "install:profile": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-profile.ps1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.1",
+    "node": ">=22.13.0"
+  }
+}

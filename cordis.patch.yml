@@ -1,0 +1,32 @@
+# dsh-second-sight 的加载补丁：把宿主半边插进 composition。
+# 这套 config 是默认值；要改就直接改这里，或在 profile 的 cordis.patch.yml 里
+# 用 `- id: second-sight` + `config:` 覆盖（后者的层更靠上）。
+#
+# 注意：这里**没有**副模型（vision.provider / vision.model）。副眼是会话级的，
+# 在每个会话的模型面板里现选；没选就没有副眼，也不会悄悄用到某个全局默认。
+- insert:
+    - id: second-sight
+      name: dsh-second-sight
+      config:
+        # 副模型一次回答的 token 上限（与选谁无关的调参项）
+        maxTokens: 2048
+        # 省略 providers = 给所有 provider 挂双胞胎路由
+        # providers:
+        #   - opencode-go
+        #   - ctyun-codingplan
+        # excludeProviders:
+        #   - some-provider
+        questions:
+          # 单张图的提问预算：超过后 ask_image 直接拒绝，防止主模型把图问烂
+          maxPerImage: 12
+          # 同一张图保留几轮问答作为追问上下文（0 = 不带历史）
+          historyTurns: 6
+        handles:
+          # 句柄里保留的 sha256 前缀长度；8 位可能撞、12 位（48 bit）够用
+          length: 12
+        tool:
+          # twin = 只在双胞胎会话里暴露 ask_image（真多模态会话不需要）
+          # always = 任何会话都暴露，让主模型自己决定要不要问
+          visibility: twin
+          # true = 每次 ask_image 打一条 info 日志（排障用，平时关着）
+          log: false
