@@ -78,7 +78,7 @@ const MODEL_VISION = {
   reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'low' },
 }
 
-/** 一个「真」适配器（真宿主 = pi-ai，这里只回固定内容）。 */
+/** 一个「真」适配器（真宿主 = pi-ai，这里只回固定内容；reply 传函数可按请求逐次计算）。 */
 function baseAdapter(id, models, reply) {
   const catalog = new Map(models.map((model) => [model.id, { ...model, provider: id }]))
   return {
@@ -96,7 +96,8 @@ function baseAdapter(id, models, reply) {
       return { model: await this.resolveModel(provider, model), stream: (options) => this.stream(options) }
     },
     async *stream(options) {
-      yield { type: 'text-delta', text: reply }
+      const text = typeof reply === 'function' ? reply(options) : reply
+      yield { type: 'text-delta', text }
       yield { type: 'finish', reason: { kind: 'stop' }, replayState: { from: id } }
     },
   }
@@ -702,6 +703,98 @@ await check('空回答视为失败', async () => {
     vision.stream = original
   }
   ok(message.includes('没有返回任何文字'), '提示空回答')
+})
+
+await check('副模型把工具调用当正文时，加硬约束重试一次并采用第二次答案', async () => {
+  // 用户实际遇到的那段：DSML 尾巴 + 一条打开附件路径的 bash 命令。
+  const leaked = '```bash\npython - <<\'PY\'\nfrom PIL import Image\nprint(im.size)\nPY\n```\n</｜｜DSML｜｜ parameter>'
+  let visionCalls = 0
+  const host = createHost({
+    reply: (options) => {
+      if (options.model !== MODEL_VISION.id) return '主模型回答'
+      visionCalls += 1
+      return visionCalls === 1 ? leaked : '操作列按钮靠右对齐，列宽约占表格的 8%。'
+    },
+  })
+  bootstrap(host)
+  await pickVision(host)
+  await drain(request(host, [{ role: 'user', content: [imageBlock('a'.repeat(64))] }]))
+  const result = await callAsk(host, { image: 'img-' + 'a'.repeat(12), question: '操作列怎么对齐？' })
+  equal(result.text, '操作列按钮靠右对齐，列宽约占表格的 8%。', '用第二次答案')
+  equal(visionCalls, 2, '重试了一次')
+  const retryPrompt = host.seen.streams.at(-1).messages[0].content.at(-1).text
+  ok(retryPrompt.includes('previous reply was a tool call'), '重试指令点名上次是工具调用')
+  ok(host.logs.some(([level, message]) => level === 'warn' && message.includes('工具调用')), '记了 warn')
+})
+
+await check('两次都返回工具调用时报错，且失败不进缓存', async () => {
+  let visionCalls = 0
+  const host = createHost({
+    reply: (options) => {
+      if (options.model !== MODEL_VISION.id) return '主模型回答'
+      visionCalls += 1
+      return '```bash\nls\n```'
+    },
+  })
+  bootstrap(host)
+  await pickVision(host)
+  await drain(request(host, [{ role: 'user', content: [imageBlock('b'.repeat(64))] }]))
+  const handle = 'img-' + 'b'.repeat(12)
+  let message = ''
+  try {
+    await callAsk(host, { image: handle, question: '这是什么？' })
+  } catch (error) {
+    message = error.message
+  }
+  ok(message.includes('连续两次返回工具调用'), '错误可读')
+  equal(visionCalls, 2, '只重试一次')
+  try {
+    await callAsk(host, { image: handle, question: '这是什么？' })
+  } catch {
+    // 预期再次失败：这一问只为验证没有缓存 rejection。
+  }
+  equal(visionCalls, 4, '失败没有进缓存')
+})
+
+await check('结构化工具调用（没有正文）也按工具调用重试', async () => {
+  const host = createHost({ reply: '第二次正常' })
+  bootstrap(host)
+  await pickVision(host)
+  await drain(request(host, [{ role: 'user', content: [imageBlock('e'.repeat(64))] }]))
+  const vision = host.provider('xhx2api')
+  const original = vision.stream
+  let calls = 0
+  vision.stream = async function* (options) {
+    calls += 1
+    if (options.model === MODEL_VISION.id && calls === 1) {
+      yield { type: 'tool-call-delta', index: 0, id: 'call-1', name: 'bash', argumentsDelta: '{"command":"ls"}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    yield { type: 'text-delta', text: '第二次答案' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  try {
+    const result = await callAsk(host, { image: 'img-' + 'e'.repeat(12), question: '这是什么？' })
+    equal(result.text, '第二次答案', '用第二次答案')
+    equal(calls, 2, '重试了一次')
+  } finally {
+    vision.stream = original
+  }
+})
+
+await check('正常答案只调一次，prompt 里写着「你没有工具」', async () => {
+  const host = createHost({ reply: '图里写的是 hello' })
+  bootstrap(host)
+  await pickVision(host)
+  await drain(request(host, [{ role: 'user', content: [imageBlock('c'.repeat(64))] }]))
+  const result = await callAsk(host, { image: 'img-' + 'c'.repeat(12), question: '图里写了什么？' })
+  equal(result.text, '图里写的是 hello', '答案')
+  const visionStreams = host.seen.streams.filter((options) => options.model === MODEL_VISION.id)
+  equal(visionStreams.length, 1, '没有重试')
+  const prompt = visionStreams[0].messages[0].content.at(-1).text
+  ok(prompt.includes('You have no tools'), '基础约束')
+  ok(prompt.includes('Normalized copy'), '点名路径提示')
 })
 
 await check('presentCall 展示句柄与问题', async () => {

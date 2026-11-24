@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     const PACKAGE = 'dsh-second-sight'
     const NAMESPACE = 'secondSight'
     /** 与 package.json 同步；scripts/check-manifest.mjs 会校验，避免面板显示旧版本号。 */
-    const CLIENT_VERSION = '0.6.3'
+    const CLIENT_VERSION = '0.6.4'
 
     // —— 远端描述符 ——
     //

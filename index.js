@@ -174,21 +174,43 @@ const reasonOf = (error) => (error instanceof Error ? error.message : String(err
 
 const modilitiesWithImage = (current) => [...new Set(['text', 'image', ...(Array.isArray(current) ? current : [])])]
 
-async function askVision(host, refs, handles, question, detail, signal, pick) {
-  const { ctx, cfg, state } = host
-  const prior = handles.length === 1 ? state.history.get(handles[0]) ?? [] : []
-  const instruction = detail === 'gist'
-    ? 'Answer in at most two sentences. Be factual; do not speculate.'
-    : 'Answer exhaustively. Quote visible text verbatim. Use a markdown table for tabular data. Say plainly when something is not visible.'
-  const prompt = [
-    instruction,
-    prior.length === 0
-      ? ''
-      : `Earlier exchanges about this image:\n${prior.map((item) => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n')}`,
-    handles.length > 1 ? `Images are supplied in this order: ${handles.join(', ')}` : '',
-    `Question: ${question}`,
-  ].filter((part) => part !== '').join('\n\n')
+/**
+ * 副模型只被当作「看图并回答」的普通对话：请求里不带 tools，也没有 tool loop。
+ * 但 agentic 模型看到附件旁那行 "Normalized copy … <path>"（宿主在图片前注入的
+ * 只读副本路径）会顺手去调 bash/python。第一次就把「你没有工具」写死在指令里。
+ */
+const VISION_RULES = [
+  'You are a vision describer called through a tool. You have no tools, no shell, and no filesystem access.',
+  'Never emit tool calls, shell commands, or code meant to be executed; never repeat tool-call markup such as DSML.',
+  'The image preamble may contain a "Normalized copy" path: it is host metadata, not something for you to open, inspect, copy, or modify.',
+  'Answer only from what is visible in the image.',
+].join(' ')
 
+/** 第一次仍然把工具调用当正文时，第二次用这段更硬的约束（并点名上次的错误）。 */
+const VISION_RULES_RETRY = [
+  'IMPORTANT: your previous reply was a tool call, not an answer, and it was discarded.',
+  'You cannot run tools, commands, or code, and you cannot read files. Do not mention or use the "Normalized copy" path.',
+  'Answer the question in plain prose (a markdown table is fine) using only what you can see in the image.',
+  'If the image does not show the requested detail, say so plainly instead of trying to inspect anything.',
+].join(' ')
+
+/**
+ * 判断一段「答案」是不是工具调用文本。返回命中的特征名，没命中返回 ''。
+ * 只认强特征，避免把「抄写图里代码」这种正常答案误判掉。
+ */
+function toolCallMarker(text) {
+  if (/DSML/i.test(text)) return 'DSML 标记'
+  if (/<\/?[｜|]{1,2}[^>\n]{0,40}[｜|]{1,2}>/.test(text)) return '特殊 token'
+  if (/"(?:tool_calls?|tool_call_id|function_call)"\s*:/.test(text)) return 'tool_calls JSON'
+  // 整段答案只有一个 shell 代码块：通常是想执行命令而不是回答。真在转写命令的答案
+  // 一般会带一句说明，重试时会按约束补上。
+  if (/^\s*```(?:bash|sh|shell|zsh|powershell|pwsh)\b[\s\S]*```\s*$/i.test(text)) return '整段命令'
+  return ''
+}
+
+/** 与副模型跑一轮纯文本对话：拼出 text-delta，同时记下有没有结构化工具调用。 */
+async function streamVision(host, refs, prompt, signal, pick) {
+  const { ctx, cfg } = host
   const content = []
   for (const ref of refs) content.push({ type: 'image', attachment: ref })
   // 图片在前、问题在后：同一张图的多次提问共享可缓存前缀（ADR-4）。
@@ -196,6 +218,7 @@ async function askVision(host, refs, handles, question, detail, signal, pick) {
 
   const parts = []
   let failure
+  let toolCall = false
   const options = {
     provider: pick.provider,
     model: pick.model,
@@ -207,6 +230,9 @@ async function askVision(host, refs, handles, question, detail, signal, pick) {
   for await (const chunk of ctx.llm.stream(options)) {
     if (chunk instanceof Object && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
       parts.push(chunk.text)
+    } else if (chunk instanceof Object && (chunk.type === 'tool-call-delta' || chunk.type === 'tool-call')) {
+      // 结构化工具调用：没有 tool loop，同样没法执行，按「不是答案」处理。
+      toolCall = true
     } else if (chunk instanceof Object && chunk.type === 'finish') {
       const reason = chunk.reason
       if (reason?.kind === 'error') failure = reason.failure
@@ -218,8 +244,42 @@ async function askVision(host, refs, handles, question, detail, signal, pick) {
   if (failure !== undefined) {
     throw new Error(`视觉模型调用失败：${failure?.message ?? failure?.code ?? 'unknown'}${text === '' ? '' : `（已收到 ${text.length} 字的部分输出）`}`)
   }
-  if (text === '') throw new Error('视觉模型没有返回任何文字')
-  return text
+  if (text === '') {
+    if (toolCall) return { text: '', toolCall: true }
+    throw new Error('视觉模型没有返回任何文字')
+  }
+  return { text, toolCall }
+}
+
+async function askVision(host, refs, handles, question, detail, signal, pick) {
+  const { state, log } = host
+  const prior = handles.length === 1 ? state.history.get(handles[0]) ?? [] : []
+  const brief = detail === 'gist'
+    ? 'Answer in at most two sentences. Be factual; do not speculate.'
+    : 'Answer exhaustively. Quote visible text verbatim. Use a markdown table for tabular data. Say plainly when something is not visible.'
+
+  const buildPrompt = (rules) => [
+    rules,
+    brief,
+    prior.length === 0
+      ? ''
+      : `Earlier exchanges about this image:\n${prior.map((item) => `Q: ${item.question}\nA: ${item.answer}`).join('\n\n')}`,
+    handles.length > 1 ? `Images are supplied in this order: ${handles.join(', ')}` : '',
+    `Question: ${question}`,
+  ].filter((part) => part !== '').join('\n\n')
+
+  const first = await streamVision(host, refs, buildPrompt(VISION_RULES), signal, pick)
+  const marker = first.toolCall ? '结构化工具调用' : toolCallMarker(first.text)
+  if (marker === '') return first.text
+
+  // 工具调用没有执行者，返回给主模型只会变成一段看不懂的代码——重试一次，仍不行就报错。
+  log.warn(`ask_image：副模型返回了工具调用（${marker}），按「无工具」约束重试一次`)
+  const second = await streamVision(host, refs, buildPrompt(VISION_RULES_RETRY), signal, pick)
+  const again = second.toolCall ? '结构化工具调用' : toolCallMarker(second.text)
+  if (again !== '') {
+    throw new Error(`视觉模型连续两次返回工具调用（${again}）而不是答案。建议换一个副模型，或换个问法后重试。`)
+  }
+  return second.text
 }
 
 function trimAnswers(state, keepKey) {
