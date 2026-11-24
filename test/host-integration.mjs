@@ -203,6 +203,19 @@ await check('真实 ToolsService：双胞胎会话可见 ask_image，基座会�
   const plainSet = await ctx.tools.resolve({ agent, modelSelection: { provider: BASE, model: 'text-model' }, signal })
   ok(![...plainSet.view(agent).keys()].includes('ask_image'), '基座不可见')
   plainSet.dispose()
+
+  /* 双胞胎目录照抄基座，多模态模型也能选中：这时副眼已经自动关掉，
+   * ask_image 不该再出现在这一轮的请求里。 */
+  const visionSet = await ctx.tools.resolve({ agent, modelSelection: { provider: TWIN, model: 'vis-model' }, signal })
+  ok(![...visionSet.view(agent).keys()].includes('ask_image'), '双胞胎上的多模态模型也不可见')
+  visionSet.dispose()
+})
+
+await check('真实 ToolsService：带 when 的注册在没有步上下文时不可执行（可门控判定的依据）', async () => {
+  /* dsh-context-control 的「可门控」清单靠这个判定：没有 when 的注册才算可门控。 */
+  const definition = ctx.tools.definitions().find((entry) => entry.name === 'ask_image')
+  ok(definition !== undefined, 'ask_image 在注册定义里')
+  equal(ctx.tools.executable('ask_image'), undefined, '无 when 才能在没有步上下文时可执行')
 })
 
 await check('真实定义 + execute：句柄能换回附件并问到答案', async () => {

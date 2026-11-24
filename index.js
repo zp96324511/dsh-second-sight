@@ -345,11 +345,28 @@ function askImageTool(host) {
   }
 }
 
-/** 双胞胎选择器只在副模型路由下暴露：真多模态会话看不到 ask_image。 */
-function toolWhen(cfg) {
+/**
+ * 双胞胎选择器只在副模型路由下暴露：真多模态会话看不到 ask_image。
+ *
+ * 除了 provider 必须是双胞胎，模型还得是这条路由真正服务的纯文本模型。双胞胎
+ * 目录照抄基座（0.5.0），多模态模型也能在「+副眼」里选中；选中后 stateFor 会清掉
+ * 这个会话的副眼，但**会话的选择本身不会切回基座**（宿主没有替用户改选模型的
+ * 通道），于是 provider 仍是双胞胎——只看 provider 的话，一个自己就能看图、也
+ * 不会再投影图片的模型，请求里会一直挂着这个用不上的工具。
+ * @param cfg - 归一后的配置。
+ * @param routes - 已注册的双胞胎路由（base id → handle，handle.adapter.models 是纯文本模型集）。
+ */
+function toolWhen(cfg, routes) {
   if (cfg.toolVisibility === 'always') return undefined
-  return ({ modelSelection }) =>
-    typeof modelSelection?.provider === 'string' && modelSelection.provider.endsWith(cfg.providerSuffix)
+  return ({ modelSelection }) => {
+    const provider = modelSelection?.provider
+    const model = modelSelection?.model
+    if (typeof provider !== 'string' || typeof model !== 'string') return false
+    if (!provider.endsWith(cfg.providerSuffix)) return false
+    const base = provider.slice(0, provider.length - cfg.providerSuffix.length)
+    const adapter = routes?.get(base)?.adapter
+    return adapter !== undefined && adapter.models.has(model)
+  }
 }
 
 // —— 设置面板：Host ↔ Client 的 Typert 远端服务 ——
@@ -620,8 +637,8 @@ class SecondSightAdapter {
   async listModels(provider) {
     const models = await this.ctx.llm.listModels(this.base)
     // 目录里放**全部**模型（含多模态）：用户明确不要「+副眼 里只剩纯文本」那种残缺列表。
-    // 多模态模型在双胞胎上也照常能选；选中之后面板会自动关掉副眼、切回基座原生路径
-    // （见 stateFor 的清理逻辑），所以这里不需要过滤。
+    // 多模态模型在双胞胎上也照常能选；选中之后 stateFor 会清掉这个会话的副眼，
+    // 请求里也不再挂 ask_image（toolWhen 只放行这条路由真正服务的纯文本模型）。
     // provider 必须回写成双胞胎 id：LlmRuntime.listModels 会校验 model.provider === provider
     return models.map((model) => ({
       ...model,
@@ -817,7 +834,7 @@ export function apply(ctx, rawConfig, bag) {
    *
    * 注册的门槛是该 provider **至少有一个纯文本模型**——只有纯文本模型才需要副眼。
    * 但目录里给的是**全部模型**（0.5.0 起，用户推翻「+副眼 只剩纯文本」）：双胞胎上
-   * 也能选多模态模型，选中后 stateFor 会自动清掉副眼、客户端切回基座。
+   * 也能选多模态模型，选中后 stateFor 会清掉副眼，toolWhen 也不再放行 ask_image。
    * 过滤只发生在「要不要挂这条路由」的判定上，请求阶段只有纯文本模型才投影图片。
    */
   function reconcile() {
@@ -900,7 +917,7 @@ export function apply(ctx, rawConfig, bag) {
   reconcile()
   const offAdapters = ctx.on('llm/adapters-updated', reconcile)
 
-  const unregisterTool = ctx.tools.register(askImageTool(host), { when: toolWhen(cfg) })
+  const unregisterTool = ctx.tools.register(askImageTool(host), { when: toolWhen(cfg, routes) })
 
   // 设置面板的 Host 半边：客户端通过 remote.secondSight 读写本会话的副模型。
   // 基类由宿主进程提供（Gateway 的模块解析只在宿主里有效），拿不到就静默退化成配置文件默认。

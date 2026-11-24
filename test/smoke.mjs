@@ -527,6 +527,13 @@ await check('ask_image 注册成功，when 只放行双胞胎路由', async () =
   ok(typeof entry.options.when === 'function', 'when 是函数')
   equal(await entry.options.when({ modelSelection: { provider: TWIN, model: 'glm-5.3' } }), true, '双胞胎放行')
   equal(await entry.options.when({ modelSelection: { provider: 'xhx2api', model: 'glm-5.3' } }), false, '真多模态会话隐藏')
+  equal(
+    await entry.options.when({ modelSelection: { provider: TWIN, model: MODEL_VISION.id } }),
+    false,
+    '多模态模型即使在双胞胎 provider 上也不放行（副眼已自动关掉）',
+  )
+  equal(await entry.options.when({ modelSelection: { provider: TWIN } }), false, '没有模型名时隐藏')
+  equal(await entry.options.when({}), false, '没有选择时隐藏')
   equal(entry.definition.parameters.required, ['image', 'question'], '必填参数')
   equal(entry.definition.output.render({}, { text: 'x' }), [{ type: 'text', text: 'x' }], 'render')
 })
