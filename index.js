@@ -36,6 +36,8 @@ const REF_LIMIT = 512
 const ANSWER_LIMIT = 256
 const HISTORY_LIMIT = 256
 const SESSION_LIMIT = 128
+/** 子智能体沿父会话链找副模型时最多往上爬几层（宿主默认的委派深度远小于这个数）。 */
+const MAX_INHERIT_HOPS = 16
 /** 设置面板的远端服务命名空间；客户端用 ctx.get('remote.secondSight') 取。 */
 const REMOTE_NAMESPACE = 'secondSight'
 /** Gateway 读取的可远程调用方法表（等价于 TS 的 @Remote 装饰器）。 */
@@ -290,6 +292,24 @@ function trimAnswers(state, keepKey) {
   }
 }
 
+/**
+ * 子会话的直属父会话。宿主把创建元数据放在 `session.header.parentSession`：
+ * 子智能体一定带，普通 fork 一般不写。取不到（老会话、服务缺席、未来改字段）
+ * 就当没有父会话——继承是锦上添花，绝不能让它把 ask_image 弄挂。
+ * @param ctx - 宿主 ctx（`sessions` 服务由 dsh-session 提供）。
+ * @param sessionId - 任何会话 id。
+ * @returns 父会话 id，或 undefined。
+ */
+function parentSessionOf(ctx, sessionId) {
+  try {
+    const header = ctx.get('sessions')?.get?.(sessionId)?.header
+    const parent = header?.parentSession
+    return typeof parent === 'string' && parent !== '' ? parent : undefined
+  } catch {
+    return undefined
+  }
+}
+
 async function runAsk(host, args, signal, sessionId) {
   const { state, cfg, log } = host
   const handles = [...new Set(parseHandles(args?.image))]
@@ -315,10 +335,13 @@ async function runAsk(host, args, signal, sessionId) {
     return `找不到图片 ${missing.join('、')}：它可能不在当前进程的投影记忆里。${hint}`
   }
 
-  // 副模型只来自本会话在面板里的选择；没选就问不了。
+  // 副模型只来自本会话在面板里的选择（子智能体还会沿父会话继承）；都没有就问不了。
   const pick = host.pickFor(sessionId)
   if (pick === null) {
-    return '这个会话还没选副眼（识图模型）。请用户在模型按钮右边的眼睛图标里选一个能看图的模型，再重新问同一个问题。'
+    // 子智能体自己没有面板（宿主锁着它的模型接口），能选的只有父会话。
+    return parentSessionOf(host.ctx, sessionId) === undefined
+      ? '这个会话还没选副眼（识图模型）。请用户在模型按钮右边的眼睛图标里选一个能看图的模型，再重新问同一个问题。'
+      : '这个子智能体会话还没有可用的副眼，它自己没有面板（宿主锁着子会话的模型选择）。请用户在父会话里用模型按钮右边的眼睛图标选一次，子智能体会继承父会话的选择；选好后再问同一个问题。'
   }
   const key = `${[...handles].sort().join('+')}|${detail}|${pick.provider}/${pick.model}/${pick.reasoningEffort ?? ''}|${question}`
   const cached = state.answers.get(key)
@@ -881,10 +904,25 @@ export function apply(ctx, rawConfig, bag) {
     routes: () => routes,
     /** 等一次 reconcile 落定（注册要拉目录，是异步的）。 */
     ready: () => pending,
-    /** 本会话该用哪个副模型：只有面板选过的才有，没有全局默认。 */
+    /**
+     * 本会话该用哪个副模型：只有面板选过的才有，没有全局默认。
+     *
+     * 子智能体的面板拿不到选择权（宿主的 addressed subagent session 直接禁掉模型
+     * 接口），但它的 agent.id 就是自己的子会话 id，和父会话不是同一个键。所以没
+     * 在自己会话里选过时沿 `header.parentSession` 往上找：同一段对话的识图模型
+     * 跟着对话走，比「没选过」更符合直觉（fork 出来的会话同理）。链上有环或
+     * 超过深度上限就停，返回 null。
+     */
     pickFor: (sessionId) => {
-      const chosen = state.sessions.get(String(sessionId ?? ''))
-      return chosen === undefined ? null : { ...chosen }
+      let id = String(sessionId ?? '')
+      const seen = new Set()
+      for (let hop = 0; hop <= MAX_INHERIT_HOPS && id !== '' && !seen.has(id); hop += 1) {
+        const chosen = state.sessions.get(id)
+        if (chosen !== undefined) return { ...chosen }
+        seen.add(id)
+        id = parentSessionOf(ctx, id) ?? ''
+      }
+      return null
     },
   }
 

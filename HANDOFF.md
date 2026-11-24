@@ -912,3 +912,43 @@ ctx.inject(['webServer'], (scoped) => {
   页脚只在左右/下方用负 margin 做通栏贴边，上方不压列表。
 - 回归：`test/client.mjs` 新增「右边对齐 / 按钮变宽不横跳」与「列表不做负 margin 压页脚」
   两组断言（面板布局段）。
+
+## 21. 实施记录（0.7.0，2026-11-24）
+
+### 21.1 现象与宿主的硬限制
+
+- 用户报：在子智能体会话里点副模型，弹出「读取失败: model selection is unavailable for
+  addressed subagent sessions」。是**选了才报**，不是打开面板就报。
+- 上游有意为之：`@deepseek-ai/dsh-client-ui-model-selection` 的 `assertAvailable()` 先看
+  `sessions.subagentAddress(sessionId) === undefined`，子会话直接抛；`directory.load()`
+  也被同一判断挡。官方模型座位在那里同样是只读的，没有可用的写入口。
+- 插件侧的两个缺口：座位没做这个判断（按钮照常渲染）；`pickFor` 只按 `exec.agent.id`
+  查 `state.sessions`，而子代理的 `agent.id` 就是子会话 id，和父会话不是同一个键。
+
+### 21.2 A｜子会话不渲染座位（client.js）
+
+- `inject` 加 `'sessions'`，`apply` 里 `const sessions = ctx.sessions`。
+- `isChildSession(sessions, sessionId)`：`subagentAddress` 不是函数/抛错都按 false，
+  只有真返回地址才算子会话。
+- `SecondSightSeat` 在拿到 `sessionId` 后第一件事做判定，是子会话就 `return null`——
+  既不读 Host 状态，也不为它 `directoryFor()` 建目录，更不会发 `set`/`select`。
+
+### 21.3 B｜沿父会话继承（index.js）
+
+- 新增 `MAX_INHERIT_HOPS = 16` 与模块级 `parentSessionOf(ctx, sessionId)`：
+  `ctx.get('sessions')?.get?.(id)?.header?.parentSession`，取不到（老会话/服务缺席/字段改名）
+  返回 undefined，try/catch 兜住。放在模块级是因为 `runAsk` 也用它——「没选副眼」的提示
+  要分岔：普通会话让用户点眼睛，子会话让用户去父会话选（它自己没有面板）。
+- `pickFor` 改成本会话没选过就逐层往上找，先命中先用；`seen` 防自指/环，上限 16 层，
+  到顶返回 null。返回值仍是 `{ provider, model, reasoningEffort? }`，调用方（runAsk /
+  面板回带）不用改。
+- 语义：副眼选的是「这段对话用哪个识图模型」，fork / 子智能体属于同一段对话的延续，
+  跟着父会话走比「没选过」更符合直觉；父会话清掉覆盖时子会话自动回落。
+
+### 21.4 回归
+
+- `test/client.mjs`：`createClientContext` 增加可注入的 `sessions.subagentAddress`；
+  新增「子智能体会话不渲染副眼按钮」——断言不渲染、`state` 一次都没读、`select` 没发。
+- `test/smoke.mjs`：`createHost` 接受 `sessions` 假服务；新增「子智能体沿父会话继承副模型」：
+  root → child → grandchild 三级继承、最近祖先优先、清覆盖回落、自指链不转圈、无父会话为 null。
+- 全套 `npm run check`：smoke 56 / client 24 / gateway 8 / host-integration 9 全绿。

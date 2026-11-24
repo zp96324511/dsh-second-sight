@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     const PACKAGE = 'dsh-second-sight'
     const NAMESPACE = 'secondSight'
     /** 与 package.json 同步；scripts/check-manifest.mjs 会校验，避免面板显示旧版本号。 */
-    const CLIENT_VERSION = '0.6.4'
+    const CLIENT_VERSION = '0.7.0'
 
     // —— 远端描述符 ——
     //
@@ -1200,6 +1200,27 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 这个会话是不是「被寻址的子智能体会话」（addressed subagent session）。
+     *
+     * 宿主的判定只有一个：`sessions.subagentAddress(id)` 有值就代表它是某个父会话
+     * 的子会话。在这种会话里宿主会禁掉一切模型写操作——`directory.select()` 直接抛
+     * `model selection is unavailable for addressed subagent sessions`，官方的模型
+     * 座位也用同一个判断把自己锁掉。副眼没有别的写入口，所以只能在座位里不渲染；
+     * 子智能体要用的副模型由 Host 沿父会话继承（index.js 的 `pickFor`）。
+     *
+     * @param sessions - 客户端 `sessions` 服务（可能缺席，旧宿主/测试环境）。
+     * @param sessionId - 当前座位所属会话。
+     * @returns 是子会话则 true。
+     */
+    function isChildSession(sessions, sessionId) {
+      try {
+        return typeof sessions?.subagentAddress === 'function' && sessions.subagentAddress(sessionId) !== undefined
+      } catch {
+        return false
+      }
+    }
+
+    /**
      * 给官方模型选择器装一层「每 provider 一行」的视图。
      *
      * 为什么打**原型**而不是实例：模型选择器在 apply 之前就可能把 `directory.store`
@@ -1281,7 +1302,8 @@ window.__ModuleLoader__.load({
     return {
       // 静态 inject 里不要写 remote.secondSight：这个插件自己 $mount 出这个命名空间，
       // 写进去会死等（apply 不跑 → 服务不出现 → inject 永不满足）。
-      inject: ['slots', 'modelDirectories', 'locale', 'remote'],
+      // sessions 只用来判断「这是不是子智能体会话」（subagentAddress），见下面的座位。
+      inject: ['slots', 'modelDirectories', 'locale', 'remote', 'sessions'],
       // 纯函数，导出给单测：面板在窄屏/软键盘下不许顶出屏幕。
       panelRect,
       async apply(ctx) {
@@ -1324,6 +1346,7 @@ window.__ModuleLoader__.load({
         }
 
         const models = ctx.modelDirectories
+        const sessions = ctx.sessions
 
         // 座位组件：`conversation.input.right` 是 session 级 list 槽，框架会把
         // 当前会话的 sessionId 作为 prop 传进来（官方模型座位的用法一致）。
@@ -1331,6 +1354,9 @@ window.__ModuleLoader__.load({
         function SecondSightSeat(props) {
           const sessionId = typeof props.sessionId === 'string' ? props.sessionId : undefined
           if (sessionId === undefined) return null
+          // 子智能体会话里模型的写入口全部被宿主锁死：留着眼睛按钮只会让用户
+          // 点一下就看到「读取失败: model selection is unavailable…」。
+          if (isChildSession(sessions, sessionId)) return null
           let directory
           try {
             directory = models.directoryFor(sessionId)

@@ -103,7 +103,7 @@ function baseAdapter(id, models, reply) {
   }
 }
 
-function createHost({ providers = ['xhx2api', 'opencode-go'], reply = '图里写的是 hello', credentials } = {}) {
+function createHost({ providers = ['xhx2api', 'opencode-go'], reply = '图里写的是 hello', credentials, sessions } = {}) {
   const adapters = new Map()
   const listeners = new Map()
   const tools = []
@@ -199,7 +199,8 @@ function createHost({ providers = ['xhx2api', 'opencode-go'], reply = '图里写
     get: (name) =>
       name === 'agentDefaultModel' ? defaultModel
         : name === 'credentials' ? credentials
-          : undefined,
+          : name === 'sessions' ? sessions
+            : undefined,
     logger: {
       info: (...args) => logs.push(['info', ...args]),
       warn: (...args) => logs.push(['warn', ...args]),
@@ -973,6 +974,55 @@ await check('空 provider/model = 关掉副眼、回落配置默认', async () =
   const back = await bag.host.ops.set('s1', '', '', '')
   equal(back.vision, null, '回落为未选择')
   equal(bag.host.pickFor('s1'), null, 'pickFor 为 null')
+})
+
+await check('子智能体沿父会话继承副模型（子会话自己从没选过）', async () => {
+  const headers = {
+    root: { id: 'root' },
+    child: { id: 'child', parentSession: 'root' },
+    grandchild: { id: 'grandchild', parentSession: 'child' },
+    orphan: { id: 'orphan' },
+    loop: { id: 'loop', parentSession: 'loop' },
+  }
+  const host = createHost({
+    sessions: { get: (id) => (headers[id] === undefined ? undefined : { header: headers[id] }) },
+  })
+  const bag = { retryDelays: [] }
+
+  apply(host.ctx, config(), bag)
+
+  await bag.host.ready()
+  await bag.host.ops.set('root', 'opencode-go', 'vis-x', '')
+  equal(bag.host.pickFor('child'), { provider: 'opencode-go', model: 'vis-x' }, '子会话继承父会话')
+  equal(bag.host.pickFor('grandchild')?.model, 'vis-x', '隔代也继承')
+  equal(bag.host.pickFor('orphan'), null, '没有父会话就是 null')
+  equal(bag.host.pickFor('loop'), null, '自指链不会转圈，也不会抛错')
+
+  // 子会话自己选过就以自己的为准，depth 更深的顺着它走
+  await bag.host.ops.set('child', 'xhx2api', 'sensenova-6.8-flash-lite', 'high')
+  equal(
+    bag.host.pickFor('grandchild'),
+    { provider: 'xhx2api', model: 'sensenova-6.8-flash-lite', reasoningEffort: 'high' },
+    '最近的祖先优先',
+  )
+
+  // 子会话清掉自己的覆盖 → 回到父会话的选择
+  await bag.host.ops.set('child', '', '', '')
+  equal(bag.host.pickFor('child')?.provider, 'opencode-go', '清掉覆盖后回落父会话')
+  equal(bag.host.pickFor('grandchild')?.provider, 'opencode-go', '隔代同样回落')
+
+  // 父会话也清掉 → 整条链都没有副模型
+  await bag.host.ops.set('root', '', '', '')
+  equal(bag.host.pickFor('grandchild'), null, '整条链都没有')
+
+  // 子会话里 ask_image 的提示要指回父会话，而不是让它去找自己根本没有的按钮
+  await drain(request(host, [{ role: 'user', content: [imageBlock('9'.repeat(64))] }]))
+  const result = await toolOf(host).definition.execute(
+    { image: `img-${'9'.repeat(12)}`, question: '读一下' },
+    { agent: { id: 'grandchild' } },
+  )
+  ok(result.text.includes('父会话'), '提示去父会话选副眼')
+  ok(!result.text.includes('这个会话还没选副眼'), '不再让子会话去找不存在的按钮')
 })
 
 await check('主模型换成多模态 → 自动关掉这个会话的副眼', async () => {

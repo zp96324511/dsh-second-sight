@@ -368,6 +368,8 @@ function createClientContext(hostState, options = {}) {
     get: (key) => (key === 'remote.secondSight' ? remote : undefined),
     locale: { register() {}, bind: () => undefined },
     modelDirectories: { directoryFor: () => directory },
+    // 默认所有会话都不是子智能体；测「子会话里不渲染」时传 options.subagentAddress。
+    sessions: { subagentAddress: options.subagentAddress ?? (() => undefined) },
     slots: {
       inject(name, factory) {
         calls.register.push(name)
@@ -551,6 +553,22 @@ await check('座位注册在 conversation.input.right，带 order 与组件', as
   equal(host.calls.slot.options.id, 'second-sight', 'slot id')
   equal(host.calls.slot.options.order, 10, 'order')
   equal(typeof host.calls.slot.Component, 'function', '组件')
+})
+
+await check('子智能体会话（addressed subagent）不渲染副眼按钮', async () => {
+  const mini = createMiniReact()
+  const plugin = bundle.factory(fakeRequire(mini))
+  const address = (sessionId) => ({ parentSessionId: 'parent', childSessionId: sessionId, mode: 'continuable' })
+  // hostState 给的是「能渲染」的那一档：onTwin + 纯文本 + 有双胞胎。
+  // 唯一的差别是 sessions.subagentAddress 认得这个会话——按钮必须消失。
+  const host = createClientContext(hostState, { subagentAddress: address })
+  await plugin.apply(host.ctx)
+  const Component = host.calls.slot.Component
+  mini.mount(Component, { sessionId: 'child-1' })
+  const tree = await mini.flush(Component, { sessionId: 'child-1' })
+  ok(tree === null || tree === undefined, '不渲染任何东西')
+  equal(host.calls.state.length, 0, '连 Host 状态都不读（不会去碰子会话的模型接口）')
+  equal(host.calls.select.length, 0, '不替用户切模型')
 })
 
 await check('原生多模态模型不占位置', async () => {

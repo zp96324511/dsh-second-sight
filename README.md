@@ -240,6 +240,11 @@ npm run check            # 清单自检 + 语法 + 上面全部测试（CI 跑�
 
 - 双胞胎路由会出现在设置页的 provider 列表里（无地址行），与同类插件现象一致。
 - 面板的选择是**按会话、进程内**的：宿主重启后回到「未选副眼」，图片会重新被拒收，重新选一次即可。
+- **子智能体会话里没有副眼按钮**：宿主把「被寻址的子会话」的模型选择整个锁掉
+  （`sessions.subagentAddress()` 有值，`directory.select()` 直接抛
+  `model selection is unavailable for addressed subagent sessions`），连官方模型座位都是只读的。
+  所以子会话不渲染眼睛按钮，副模型**沿 `session.header.parentSession` 从父会话继承**（可隔代）；
+  父会话也没选过时，子会话里的 `ask_image` 会提示「去父会话里选一次」。
 - 面板依赖宿主的 Typert 网关（`remote.secondSight`）。宿主解析不到
   `@deepseek-ai/dsh-typert-protocol` 时按钮会提示读取失败，贴图 + `ask_image` 仍可用，
   但没法在面板里选副模型。
@@ -261,10 +266,10 @@ npm run check            # 清单自检 + 语法 + 上面全部测试（CI 跑�
 | `cordis.patch.yml` | 加载补丁与默认配置 |
 | `CHANGELOG.md` | 用户可见的版本变化 |
 | `HANDOFF.md` | 方案交接文档（契约、ADR、验收用例、实施记录） |
-| `test/smoke.mjs` | 假宿主单测（50） |
-| `test/client.mjs` | 客户端挂载单测（23） |
+| `test/smoke.mjs` | 假宿主单测（56） |
+| `test/client.mjs` | 客户端挂载单测（24） |
 | `test/gateway-mount.mjs` | 真实 Typert 网关校验（8） |
-| `test/host-integration.mjs` | 真实宿主契约测试（8） |
+| `test/host-integration.mjs` | 真实宿主契约测试（9） |
 | `test/update.mjs` | 升级通道冒烟（通道分类 / 版本比较 / 路由 / 本地拒绝升级） |
 
 ## 发布（维护者）
