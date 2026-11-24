@@ -41,6 +41,14 @@ const REMOTE_NAMESPACE = 'secondSight'
 /** Gateway 读取的可远程调用方法表（等价于 TS 的 @Remote 装饰器）。 */
 const REMOTE_METHOD_DESCRIPTOR = '@deepseek-ai/dsh-typert-protocol/remote-methods'
 const REMOTE_MODULE = '@deepseek-ai/dsh-typert-protocol'
+/**
+ * 注册时打在 `when` 上的标记：别的插件据此在提示里点名注册者。
+ *
+ * DSH 的注册表只存 `{ definition, when }`，没有归属字段，所以 `when` 是唯一能
+ * 跟着工具一起走、又不依赖加载顺序的对象。用 `Symbol.for` 是因为读它的代码在
+ * 另一个插件里，没法 import 这个常量。
+ */
+const TOOL_OWNER_KEY = Symbol.for('dsh.tool.owner')
 
 // —— 配置 ——
 
@@ -367,6 +375,38 @@ function toolWhen(cfg, routes) {
     const adapter = routes?.get(base)?.adapter
     return adapter !== undefined && adapter.models.has(model)
   }
+}
+
+/**
+ * 在 `when` 上写下注册者的名字。
+ *
+ * 门控面板要显示「由谁按会话条件起停」，而宿主的注册表不记归属。名字挂在
+ * `when` 上就跟着注册走：读写双方都不依赖「谁先 apply」，也不会因为包装接口
+ * 失败而丢信息。没有 `when`（`tool.visibility: always`）时无可附着——那种情况
+ * 下工具本来就是可手动开关的，不需要这句提示。
+ * @param when - 门控谓词，或 undefined。
+ * @param owner - 面板里该怎么称呼这个插件。
+ * @returns 同一个谓词，已打上标记。
+ */
+function declareOwner(when, owner) {
+  if (typeof when !== 'function') return when
+  try {
+    Object.defineProperty(when, TOOL_OWNER_KEY, { value: owner, configurable: true })
+  } catch (error) {
+    /* 冻结的谓词只丢一句提示，工具本身不受影响。 */
+  }
+  return when
+}
+
+/**
+ * 本插件在提示里该叫什么：优先用宿主给的 fiber 名（挂载名改了也跟得上），
+ * 拿不到（root / 测试的假 ctx）就退回包名。
+ * @param ctx - 插件的上下文。
+ * @returns 插件名。
+ */
+function pluginLabel(ctx) {
+  const name = ctx?.fiber?.name
+  return typeof name === 'string' && name !== '' && name !== 'root' ? name : 'dsh-second-sight'
 }
 
 // —— 设置面板：Host ↔ Client 的 Typert 远端服务 ——
@@ -917,7 +957,9 @@ export function apply(ctx, rawConfig, bag) {
   reconcile()
   const offAdapters = ctx.on('llm/adapters-updated', reconcile)
 
-  const unregisterTool = ctx.tools.register(askImageTool(host), { when: toolWhen(cfg, routes) })
+  const unregisterTool = ctx.tools.register(askImageTool(host), {
+    when: declareOwner(toolWhen(cfg, routes), pluginLabel(ctx)),
+  })
 
   // 设置面板的 Host 半边：客户端通过 remote.secondSight 读写本会话的副模型。
   // 基类由宿主进程提供（Gateway 的模块解析只在宿主里有效），拿不到就静默退化成配置文件默认。

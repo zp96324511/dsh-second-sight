@@ -536,6 +536,26 @@ await check('ask_image 注册成功，when 只放行双胞胎路由', async () =
   equal(await entry.options.when({}), false, '没有选择时隐藏')
   equal(entry.definition.parameters.required, ['image', 'question'], '必填参数')
   equal(entry.definition.output.render({}, { text: 'x' }), [{ type: 'text', text: 'x' }], 'render')
+  equal(
+    entry.options.when[Symbol.for('dsh.tool.owner')],
+    'dsh-second-sight',
+    'when 带上注册者名（门控面板提示用）',
+  )
+})
+
+await check('when 上的注册者名优先取 fiber 名', async () => {
+  const host = createHost()
+  host.ctx.fiber = { name: 'second-sight-canary' }
+  const bag = { retryDelays: [] }
+
+  apply(host.ctx, config(), bag)
+
+  await bag.host.ready()
+  equal(
+    toolOf(host).options.when[Symbol.for('dsh.tool.owner')],
+    'second-sight-canary',
+    '挂载名改了提示也跟着改',
+  )
 })
 
 await check('tool.visibility: always 时不装 when', async () => {

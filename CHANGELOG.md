@@ -2,6 +2,18 @@
 
 本文件记录用户可见的变化。版本号遵循语义化版本：主版本改契约，次版本加功能，修订版只修 bug。
 
+## 0.6.3 — 2026-11-24
+
+### 修复
+
+- **门控面板的提示能点名本插件了**：`ask_image` 的 `when` 上现在写着注册者
+  （`Symbol.for('dsh.tool.owner')`，值取 `ctx.fiber.name`，取不到就用
+  `dsh-second-sight`），dsh-context-control 0.10.5 读它，把「该工具由宿主…」换成
+  「该工具由 dsh-second-sight …」。之前一直显示「由宿主」：那句归属是靠包装
+  `tools.register` 抓的，而本插件只 inject `llm`、`tools`，apply 得比
+  context-control 早（后者还要等 `storageDomain`），`ask_image` 注册时包装还没装上，
+  那次注册从未被看到。名字挂到 `when` 上就跟着注册走，不挑顺序了。
+
 ## 0.6.2 — 2026-11-24
 
 ### 修复
