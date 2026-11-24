@@ -10,7 +10,8 @@
  *   2) 座位的注册名、order、组件形状；
  *   3) 原生多模态不占位、纯文本模型出现「副眼」按钮；
  *   4) 打开面板 → 选模型 → 写 Host + 切会话选择，两件事都发生；
- *   5) 关掉副眼 → 清 Host 覆盖 + 切回基座 provider。
+ *   5) 关掉副眼 → 清 Host 覆盖 + 切回基座 provider；
+ *   6) 子智能体会话（sessions.subagentAddress 有值）不占位、不读 Host。
  *
  * 运行：node test/client.mjs
  */
